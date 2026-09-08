@@ -1,1 +1,392 @@
 
+/**
+ * 1. Hàm hiển thị bảng "Dán & Tự động Tải" (Gán vào nút DÁN trên Sheet)
+ */
+function showPasteAndDownloadDialog() {
+  const htmlStr = `
+    <div style="font-family: sans-serif; text-align: center; padding: 10px;">
+      <h3 style="color: #1a73e8; margin: 0 0 10px 0;">📋 Dán & Tải Tự Động</h3>
+      <p style="font-size: 13px; color: #555;">Nhấn <b>Ctrl + V</b> để dán dữ liệu.<br>Hệ thống sẽ <b>Tự Xóa Dữ Liệu Cũ</b>, dán dữ liệu mới và <b>Tự Động Tải Hình/Video</b>.</p>
+      <textarea id="pasteArea" style="width: 90%; height: 120px; border: 1px solid #ccc; border-radius: 4px; padding: 8px; font-size: 12px;" placeholder="Nhấn Ctrl + V vào đây..."></textarea>
+      <div id="status" style="margin-top: 15px; font-size: 14px; color: #0f9d58; font-weight: bold;"></div>
+      <script>
+        document.getElementById('pasteArea').addEventListener('paste', function(e) {
+          e.preventDefault(); 
+          var pastedText = (e.originalEvent || e).clipboardData.getData('text/plain');
+          document.getElementById('pasteArea').value = pastedText;
+          document.getElementById('pasteArea').disabled = true;
+          document.getElementById('status').innerText = '⏳ Đang làm sạch và dán dữ liệu...';
+          
+          google.script.run
+            .withSuccessHandler(function() {
+              document.getElementById('status').innerText = '✔️ Xong! Đang tự động mở trình tải File...';
+              
+              // Tự động kích hoạt trình tải ảnh ngay sau khi dán
+              google.script.run.downloadCRImages();
+              
+              // Đóng bảng Dán sau 800ms
+              setTimeout(function() { google.script.host.close(); }, 800);
+            })
+            .withFailureHandler(function(err) {
+              document.getElementById('status').innerText = '❌ Lỗi: ' + err.message;
+              document.getElementById('pasteArea').disabled = false;
+            })
+            .processPastedData(pastedText);
+        });
+      </script>
+    </div>
+  `;
+  const htmlOutput = HtmlService.createHtmlOutput(htmlStr).setWidth(400).setHeight(300);
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Dán & Tải File Nhanh');
+}
+
+/**
+ * 2. Hàm xử lý dữ liệu dán + Tự động xóa dữ liệu cũ từ dòng 12
+ */
+function processPastedData(text) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("データ");
+  
+  if (!sheet) throw new Error("Không tìm thấy sheet 'データ'");
+  
+  // --- THỰC HIỆN XÓA DỮ LIỆU CŨ TRƯỚC ---
+  const maxRows = Math.max(sheet.getMaxRows(), 12);
+  const maxCols = sheet.getMaxColumns();
+  if (maxRows >= 12) {
+    sheet.getRange(12, 1, maxRows - 11, maxCols).clearContent(); 
+  }
+  if (maxCols >= 7) {
+    sheet.getRange(11, 7, Math.max(1, maxRows - 10), maxCols - 6).setBackground(null);
+  }
+  
+  // --- TIẾN HÀNH DÁN DỮ LIỆU MỚI ---
+  const rows = text.split(/\r?\n/);
+  const dataToPaste = [];
+  for (let i = 0; i < rows.length; i++) {
+    let rowStr = rows[i];
+    if (rowStr === "" && i === rows.length - 1) continue; 
+    let cols = rowStr.split('\t');
+    dataToPaste.push(cols);
+  }
+  
+  if (dataToPaste.length > 0) {
+    let numCols = Math.max(...dataToPaste.map(r => r.length));
+    let normalizedData = dataToPaste.map(r => {
+      let newRow = new Array(numCols).fill("");
+      for (let j = 0; j < r.length; j++) { newRow[j] = r[j]; }
+      return newRow;
+    });
+    
+    // Ghi dữ liệu mới vào bảng (Bắt đầu từ dòng 12, cột A)
+    sheet.getRange(12, 1, normalizedData.length, numCols).setValues(normalizedData);
+  } else {
+    throw new Error("Không có dữ liệu hợp lệ để dán.");
+  }
+}
+
+/**
+ * 3. Hàm kích hoạt tải Media từ Drive (Gán vào nút CR取得)
+ */
+function downloadCRImages() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const mainSheet = ss.getSheetByName("データ");
+  
+  if (!mainSheet) return;
+
+  const lastRow = mainSheet.getLastRow();
+  if (lastRow < 12) return;
+
+  const loadingHtml = HtmlService.createHtmlOutput(
+    '<div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #333; text-align:center; padding:10px;">' +
+    '  <h3 style="margin: 0 0 10px 0; color: #f2bd00;">⏳ Đang trích xuất Media...</h3>' +
+    '  <p style="font-size:12px; color:#666; margin:0;">Hệ thống đang quét Link Drive lấy Hình & Video. Vui lòng đợi...</p>' +
+    '</div>'
+  ).setWidth(350).setHeight(150);
+  ui.showModelessDialog(loadingHtml, 'Trạng thái');
+
+  const headers = mainSheet.getRange(11, 1, 1, mainSheet.getLastColumn()).getValues()[0];
+  let linkColIdx = -1;
+  let fileNameColIdx = -1;
+
+  // Xác định vị trí cột
+  for (let i = 0; i < headers.length; i++) {
+    let headerName = String(headers[i]).trim();
+    if (headerName === "Link") linkColIdx = i;
+    if (headerName === "File_name") fileNameColIdx = i;
+  }
+
+  if (linkColIdx === -1 || fileNameColIdx === -1) {
+    ui.alert("Lỗi", "Không tìm thấy cột 'Link' hoặc 'File_name' ở dòng 11.", ui.ButtonSet.OK);
+    return;
+  }
+
+  const data = mainSheet.getRange(12, 1, lastRow - 11, mainSheet.getLastColumn()).getValues();
+  const allFileTasks = [];
+  let driveErrors = [];
+
+  const mimeToExt = {
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+    'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/x-msvideo': '.avi', 'video/x-matroska': '.mkv'
+  };
+
+  // Quét dòng dữ liệu
+  for (let r = 0; r < data.length; r++) {
+    let driveUrl = String(data[r][linkColIdx]).trim();
+    let folderName = String(data[r][fileNameColIdx]).trim();
+
+    if (driveUrl && folderName) {
+      let idMatch = driveUrl.match(/[-\w]{25,}/);
+      if (idMatch) {
+        try {
+          let id = idMatch[0];
+          let isFolder = (driveUrl.indexOf('/folders/') !== -1 || driveUrl.indexOf('folderview') !== -1);
+          let filesToProcess = [];
+
+          if (isFolder) {
+            let folder = DriveApp.getFolderById(id);
+            let files = folder.getFiles();
+            while (files.hasNext()) filesToProcess.push(files.next());
+          } else {
+            filesToProcess.push(DriveApp.getFileById(id));
+          }
+
+          for (let f of filesToProcess) {
+            let file = f;
+            try {
+              if (file.getMimeType() === 'application/vnd.google-apps.shortcut') {
+                let targetId = file.getTargetId();
+                if (targetId) file = DriveApp.getFileById(targetId);
+              }
+            } catch (e) {
+              driveErrors.push(driveUrl + " (Lỗi truy cập Shortcut)");
+            }
+
+            let mimeType = file.getMimeType();
+            let originalName = file.getName() || "Media_Khong_Ten";
+            originalName = originalName.trim().replace(/\s+\./g, '.').normalize('NFC');
+            let hasExt = originalName.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp|mp4|mov|avi|mkv)$/i);
+            
+            let isMedia = mimeType.indexOf('image/') !== -1 || mimeType.indexOf('video/') !== -1 || hasExt;
+
+            if (isMedia) {
+              if (!hasExt && mimeToExt[mimeType]) originalName += mimeToExt[mimeType];
+              allFileTasks.push({ id: file.getId(), name: originalName, folder: folderName });
+            }
+          }
+        } catch (e) {
+          driveErrors.push(driveUrl);
+        }
+      }
+    }
+  }
+
+  // Cảnh báo nếu gặp link không có quyền truy cập
+  if (driveErrors.length > 0) {
+    let uniqueErrors = [...new Set(driveErrors)];
+    let msg = "Phát hiện " + uniqueErrors.length + " link Drive bị từ chối quyền truy cập hoặc hỏng:\n\n";
+    for (let k = 0; k < Math.min(uniqueErrors.length, 5); k++) {
+      msg += "- " + uniqueErrors[k] + "\n";
+    }
+    if (uniqueErrors.length > 5) msg += "... và " + (uniqueErrors.length - 5) + " link khác.\n";
+    ui.alert("⚠️ CẢNH BÁO", msg, ui.ButtonSet.OK);
+  }
+
+  // Khởi chạy file Index.html để xuất ZIP
+  if (allFileTasks.length > 0) {
+    var htmlTemplate = HtmlService.createTemplateFromFile('Index');
+    htmlTemplate.fileTasksJson = JSON.stringify(allFileTasks);
+    
+    // Xuất file CR_Export.zip
+    htmlTemplate.zipFileName = "CR_Export.zip"; 
+    
+    htmlTemplate.warningMsg = "";
+    var htmlOutput = htmlTemplate.evaluate().setWidth(450).setHeight(360);
+    ui.showModelessDialog(htmlOutput, 'Tải Dữ Liệu Dạng ZIP');
+  } else {
+    ui.alert("Thông báo", "Không tìm thấy hình ảnh hay video hợp lệ nào để tải xuống.", ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * 4. Hàm gán cho nút "CR複製" (Nhân bản / Đổi tên khi tải về)
+ */
+function duplicateCRImages() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const mainSheet = ss.getSheetByName("データ");
+  
+  if (!mainSheet) return;
+
+  const lastRow = mainSheet.getLastRow();
+  if (lastRow < 12) {
+    ui.alert("Thông báo", "Không có dữ liệu ở bảng chính để xử lý.", ui.ButtonSet.OK);
+    return;
+  }
+
+  const loadingHtml = HtmlService.createHtmlOutput(
+    '<div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #333; text-align:center; padding:10px;">' +
+    '  <h3 style="margin: 0 0 10px 0; color: #1a73e8;">⏳ Đang tạo bản sao...</h3>' +
+    '  <p style="font-size:12px; color:#666; margin:0;">Hệ thống đang dò tìm file gốc và thiết lập tên mới. Vui lòng đợi!</p>' +
+    '</div>'
+  ).setWidth(350).setHeight(150);
+  ui.showModelessDialog(loadingHtml, 'Trạng thái');
+
+  const headers = mainSheet.getRange(11, 1, 1, mainSheet.getLastColumn()).getValues()[0];
+  let linkColIdx = -1;
+  let fileNameColIdx = -1; 
+  let origCRColIdx = -1;   
+  let newCRColIdx = -1;    
+
+  for (let i = 0; i < headers.length; i++) {
+    let hName = String(headers[i]).trim();
+    if (hName === "Link") linkColIdx = i;
+    if (hName === "File_name") fileNameColIdx = i;
+    if (hName === "元CR名") origCRColIdx = i;
+    if (hName === "先CR名") newCRColIdx = i;
+  }
+
+  if (linkColIdx === -1 || origCRColIdx === -1 || newCRColIdx === -1) {
+    ui.alert("Lỗi", "Không tìm thấy các cột 'Link', '元CR名' hoặc '先CR名' ở dòng 11.", ui.ButtonSet.OK);
+    return;
+  }
+
+  const data = mainSheet.getRange(12, 1, lastRow - 11, mainSheet.getLastColumn()).getValues();
+  const allFileTasks = [];
+  let driveErrors = [];
+
+  for (let r = 0; r < data.length; r++) {
+    let driveUrl = String(data[r][linkColIdx]).trim();
+    let folderName = fileNameColIdx !== -1 ? String(data[r][fileNameColIdx]).trim() : "";
+    let origName = String(data[r][origCRColIdx]).trim().normalize('NFC');
+    let newName = String(data[r][newCRColIdx]).trim().normalize('NFC');
+
+    if (driveUrl && origName && newName) {
+      let idMatch = driveUrl.match(/[-\w]{25,}/);
+      if (idMatch) {
+        try {
+          let id = idMatch[0];
+          let isFolder = (driveUrl.indexOf('/folders/') !== -1 || driveUrl.indexOf('folderview') !== -1);
+          let filesToProcess = [];
+
+          if (isFolder) {
+            let folder = DriveApp.getFolderById(id);
+            let files = folder.getFiles();
+            while (files.hasNext()) filesToProcess.push(files.next());
+          } else {
+            filesToProcess.push(DriveApp.getFileById(id));
+          }
+
+          let fileFound = false;
+
+          for (let f of filesToProcess) {
+            let file = f;
+            try {
+              if (file.getMimeType() === 'application/vnd.google-apps.shortcut') {
+                let targetId = file.getTargetId();
+                if (targetId) file = DriveApp.getFileById(targetId);
+              }
+            } catch (e) {
+              driveErrors.push(driveUrl + " (Lỗi truy cập Shortcut)");
+            }
+
+            let fName = file.getName().normalize('NFC');
+            let baseFName = fName.substring(0, fName.lastIndexOf('.')) || fName;
+            let baseOrigName = origName.substring(0, origName.lastIndexOf('.')) || origName;
+
+            if (fName === origName || baseFName === baseOrigName || fName.includes(origName) || origName.includes(baseFName)) {
+              
+              let extMatch = fName.match(/\.([a-zA-Z0-9]+)$/);
+              let trueExtension = extMatch ? extMatch[0] : "";
+
+              let newExtMatch = newName.match(/\.([a-zA-Z0-9]+)$/);
+              if (!newExtMatch && trueExtension !== "") {
+                newName += trueExtension; 
+              }
+
+              allFileTasks.push({ id: file.getId(), name: newName, folder: folderName });
+              fileFound = true;
+              break; 
+            }
+          }
+        } catch (e) {
+          driveErrors.push(driveUrl);
+        }
+      }
+    }
+  }
+
+  if (driveErrors.length > 0) {
+    let uniqueErrors = [...new Set(driveErrors)];
+    let msg = "Phát hiện " + uniqueErrors.length + " link Drive bị từ chối quyền:\n\n";
+    for (let k = 0; k < Math.min(uniqueErrors.length, 5); k++) {
+      msg += "- " + uniqueErrors[k] + "\n";
+    }
+    if (uniqueErrors.length > 5) msg += "... và " + (uniqueErrors.length - 5) + " link khác.\n";
+    ui.alert("⚠️ CẢNH BÁO", msg, ui.ButtonSet.OK);
+  }
+
+  if (allFileTasks.length > 0) {
+    var htmlTemplate = HtmlService.createTemplateFromFile('Index');
+    htmlTemplate.fileTasksJson = JSON.stringify(allFileTasks);
+    
+    // Xuất file CR_Export.zip
+    htmlTemplate.zipFileName = "CR_Export.zip"; 
+    
+    htmlTemplate.warningMsg = "";
+    var htmlOutput = htmlTemplate.evaluate().setWidth(450).setHeight(360);
+    ui.showModelessDialog(htmlOutput, 'Tải Dữ Liệu Dạng ZIP');
+  } else {
+    ui.alert("Thông báo", "Không tìm thấy file gốc (元CR名) nào khớp trong các Link Drive.", ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * 5. Hàm xóa sạch dữ liệu (Dành riêng cho nút DELETE độc lập) - CÓ TỰ ĐỘNG TẮT THÔNG BÁO
+ */
+function deleteData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const mainSheet = ss.getSheetByName("データ");
+  
+  if (mainSheet) {
+    const maxRows = Math.max(mainSheet.getMaxRows(), 12);
+    const maxCols = mainSheet.getMaxColumns();
+    
+    // Làm sạch dữ liệu
+    if (maxRows >= 12) {
+      mainSheet.getRange(12, 1, maxRows - 11, maxCols).clearContent(); 
+    }
+    if (maxCols >= 7) {
+      mainSheet.getRange(11, 7, Math.max(1, maxRows - 10), maxCols - 6).setBackground(null);
+    }
+    
+    // Hiển thị bảng thông báo tự động tắt sau 1.5 giây
+    const htmlStr = `
+      <div style="font-family: sans-serif; text-align: center; padding: 20px 10px;">
+        <h3 style="color: #0f9d58; margin: 0 0 10px 0;">✔️ Thành công</h3>
+        <p style="font-size: 14px; color: #555; margin: 0;">Đã dọn dẹp sạch toàn bộ dữ liệu từ dòng 12!</p>
+        <script>
+          // Tự động đóng Popup sau 1.5 giây
+          setTimeout(function() {
+            google.script.host.close();
+          }, 1500);
+        </script>
+      </div>
+    `;
+    const htmlOutput = HtmlService.createHtmlOutput(htmlStr).setWidth(300).setHeight(130);
+    SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Trạng thái');
+  }
+}
+
+/**
+ * 6. Hàm phụ trợ lấy dữ liệu file Base64 từ Drive
+ */
+function getFileBase64(fileId) {
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var blob = file.getBlob();
+    return Utilities.base64Encode(blob.getBytes());
+  } catch (e) {
+    return null;
+  }
+}
