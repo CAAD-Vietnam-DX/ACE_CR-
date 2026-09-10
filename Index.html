@@ -2,7 +2,8 @@
 <html>
 <head>
   <base target="_top">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <?!= include('JSZip'); ?>
+
   <style>
     body { font-family: 'Segoe UI', Arial, sans-serif; padding: 10px; background-color: #fff; color: #333; margin: 0; }
     h4 { color: #202124; margin: 0 0 15px 0; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px;}
@@ -38,7 +39,7 @@
   <script>
     var fileTasks = <?!= fileTasksJson ?>;
     var zipName = "<?= zipFileName ?>"; 
-    var warningMsg = "<?= warningMsg ?>"; // Biến cảnh báo truyền từ Code.gs
+    var warningMsg = "<?= warningMsg ?>"; 
     var zip = new JSZip();
     var currentIndex = 0;
     var base64Cache = {}; 
@@ -112,14 +113,13 @@
         document.getElementById("progress-text").innerText = "Dữ liệu đã được tải xuống máy tính (100%)";
         document.getElementById("progress-bar").style.width = "100%";
         
-        // KIỂM TRA NẾU CÓ CẢNH BÁO TỪ CAMPAIGNS
         let timeoutToClose = 2000;
         if (warningMsg && warningMsg !== "") {
             document.getElementById("title").innerText = "Hoàn tất (Có cảnh báo)!";
-            document.getElementById("title").style.color = "#f29900"; // Màu cam cảnh báo
+            document.getElementById("title").style.color = "#f29900"; 
             document.getElementById("progress-bar").style.backgroundColor = "#f29900";
             log("<br>⚠️ " + warningMsg, "#f29900");
-            timeoutToClose = 5000; // Có cảnh báo thì giữ 5 giây để user đọc
+            timeoutToClose = 5000; 
         } else {
             document.getElementById("title").innerText = "Xử lý hoàn tất!";
             document.getElementById("title").style.color = "#0f9d58";
@@ -137,7 +137,6 @@
 
         document.getElementById("close-btn").style.display = "block";
 
-        // Lệnh ÉP TẮT trình duyệt
         setTimeout(function() { 
             let finalColor = (warningMsg && warningMsg !== "") ? "#f29900" : "#0f9d58";
             document.body.innerHTML = "<h3 style='text-align:center; color:"+finalColor+"; margin-top:50px;'>Đã hoàn tất! Cửa sổ đang đóng...</h3>";
@@ -151,7 +150,6 @@
     }
 
     window.onload = function() {
-      // Hiện thông báo ngay lúc đầu nếu có
       if (warningMsg && warningMsg !== "") {
           log("⚠️ " + warningMsg, "#f29900");
       }
