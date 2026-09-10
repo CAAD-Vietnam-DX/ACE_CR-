@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 10px; background-color: #fff; color: #333; margin: 0; }
+    h4 { color: #202124; margin: 0 0 15px 0; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px;}
+    .spinner { width: 16px; height: 16px; border: 2px solid #1a73e8; border-top: 2px solid transparent; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .progress-container { margin-bottom: 15px; }
+    .progress-text { font-size: 13px; color: #5f6368; margin-bottom: 6px; font-weight: 500;}
+    .progress-bar-bg { width: 100%; background-color: #e8eaed; border-radius: 4px; height: 6px; overflow: hidden; }
+    .progress-bar { width: 0%; height: 100%; background-color: #1a73e8; transition: width 0.2s ease; }
+    .log-area { font-size: 12px; color: #5f6368; height: 120px; overflow-y: auto; border: 1px solid #dadce0; padding: 8px; background: #f8f9fa; border-radius: 4px; font-family: monospace;}
+    .success-icon { color: #0f9d58; font-weight: bold; display: none; font-size: 18px;}
+    .btn-close { display: none; margin: 10px auto 0 auto; padding: 6px 16px; background-color: #f1f3f4; color: #333; border: 1px solid #dadce0; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 13px; text-align: center;}
+    .btn-close:hover { background-color: #e8eaed; }
+  </style>
+</head>
+<body>
+  <h4>
+    <div id="spinner" class="spinner"></div>
+    <span id="success-icon" class="success-icon">✓</span>
+    <span id="title">Hệ thống đang xử lý...</span>
+  </h4>
+  
+  <div class="progress-container">
+    <div id="progress-text" class="progress-text">Khởi tạo kết nối (0%)</div>
+    <div class="progress-bar-bg">
+      <div id="progress-bar" class="progress-bar"></div>
+    </div>
+  </div>
+  
+  <div id="log-area" class="log-area"></div>
+  <button id="close-btn" class="btn-close" onclick="google.script.host.close()">Đóng cửa sổ</button>
+
+  <script>
+    var fileTasks = <?!= fileTasksJson ?>;
+    var zipName = "<?= zipFileName ?>"; 
+    var warningMsg = "<?= warningMsg ?>"; // Biến cảnh báo truyền từ Code.gs
+    var zip = new JSZip();
+    var currentIndex = 0;
+    var base64Cache = {}; 
+
+    function log(msg, color) {
+      var logArea = document.getElementById("log-area");
+      logArea.innerHTML += "<div style='color:" + (color || "#5f6368") + "; margin-bottom: 3px;'>" + msg + "</div>";
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function processNextFile() {
+      if (currentIndex >= fileTasks.length) {
+        generateZip();
+        return;
+      }
+
+      var task = fileTasks[currentIndex];
+      var pct = Math.round((currentIndex / fileTasks.length) * 85);
+      
+      document.getElementById("progress-text").innerText = "Đang xử lý: " + task.name + " (" + (currentIndex + 1) + "/" + fileTasks.length + ")";
+      document.getElementById("progress-bar").style.width = pct + "%";
+
+      var filePath = task.folder ? (task.folder + "/" + task.name) : task.name;
+
+      if (task.base64) {
+        log("> Nén file: " + task.name);
+        zip.file(filePath, task.base64, {base64: true});
+        log("  Done: " + task.name, "#0f9d58");
+        currentIndex++;
+        processNextFile();
+      } else if (task.id) {
+        if (base64Cache[task.id]) {
+           log("> Nhân bản file từ bộ nhớ: " + task.name);
+           zip.file(filePath, base64Cache[task.id], {base64: true});
+           log("  Done (Cached): " + task.name, "#0f9d58");
+           currentIndex++;
+           processNextFile();
+        } else {
+           log("> Fetching: " + task.name);
+           google.script.run.withSuccessHandler(function(base64Data) {
+             if (base64Data) {
+               base64Cache[task.id] = base64Data; 
+               zip.file(filePath, base64Data, {base64: true});
+               log("  Done: " + task.name, "#0f9d58");
+             } else {
+               log("  Skipped (Error/No Access): " + task.name, "#d93025");
+             }
+             currentIndex++;
+             processNextFile();
+           }).withFailureHandler(function(err) {
+             log("  Failed: " + task.name, "#d93025");
+             currentIndex++;
+             processNextFile();
+           }).getFileBase64(task.id);
+        }
+      } else {
+        currentIndex++;
+        processNextFile();
+      }
+    }
+
+    function generateZip() {
+      document.getElementById("title").innerText = "Đang xuất dữ liệu...";
+      document.getElementById("progress-text").innerText = "Đóng gói file ZIP (90%)";
+      document.getElementById("progress-bar").style.width = "90%";
+      log("> Đang nén dữ liệu...");
+
+      zip.generateAsync({type: "blob"}).then(function(content) {
+        document.getElementById("spinner").style.display = "none";
+        document.getElementById("success-icon").style.display = "block";
+        document.getElementById("progress-text").innerText = "Dữ liệu đã được tải xuống máy tính (100%)";
+        document.getElementById("progress-bar").style.width = "100%";
+        
+        // KIỂM TRA NẾU CÓ CẢNH BÁO TỪ CAMPAIGNS
+        let timeoutToClose = 2000;
+        if (warningMsg && warningMsg !== "") {
+            document.getElementById("title").innerText = "Hoàn tất (Có cảnh báo)!";
+            document.getElementById("title").style.color = "#f29900"; // Màu cam cảnh báo
+            document.getElementById("progress-bar").style.backgroundColor = "#f29900";
+            log("<br>⚠️ " + warningMsg, "#f29900");
+            timeoutToClose = 5000; // Có cảnh báo thì giữ 5 giây để user đọc
+        } else {
+            document.getElementById("title").innerText = "Xử lý hoàn tất!";
+            document.getElementById("title").style.color = "#0f9d58";
+            document.getElementById("progress-bar").style.backgroundColor = "#0f9d58";
+            log("> Xuất file thành công.", "#0f9d58");
+        }
+
+        var zipBlobUrl = URL.createObjectURL(content);
+        var a = document.createElement("a");
+        a.href = zipBlobUrl;
+        a.download = zipName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        document.getElementById("close-btn").style.display = "block";
+
+        // Lệnh ÉP TẮT trình duyệt
+        setTimeout(function() { 
+            let finalColor = (warningMsg && warningMsg !== "") ? "#f29900" : "#0f9d58";
+            document.body.innerHTML = "<h3 style='text-align:center; color:"+finalColor+"; margin-top:50px;'>Đã hoàn tất! Cửa sổ đang đóng...</h3>";
+            setInterval(function(){ google.script.host.close(); }, 500);
+        }, timeoutToClose);
+
+      }).catch(function(err) {
+        log("> Lỗi xuất dữ liệu: " + err.message, "#d93025");
+        document.getElementById("close-btn").style.display = "block";
+      });
+    }
+
+    window.onload = function() {
+      // Hiện thông báo ngay lúc đầu nếu có
+      if (warningMsg && warningMsg !== "") {
+          log("⚠️ " + warningMsg, "#f29900");
+      }
+      
+      if (fileTasks.length > 0) {
+        processNextFile();
+      } else {
+        log("> Không có dữ liệu đầu vào.", "#d93025");
+        document.getElementById("spinner").style.display = "none";
+        document.getElementById("close-btn").style.display = "block";
+      }
+    };
+  </script>
+</body>
+</html>
