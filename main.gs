@@ -1,7 +1,31 @@
 /**
+ * =======================================================================
+ * NÂNG CẤP BẢO MẬT: STANDALONE SCRIPT
+ * =======================================================================
+ * Thay thế ID dưới đây bằng ID file Google Sheets chứa dữ liệu của bạn.
+ * Ví dụ URL: https://docs.google.com/spreadsheets/d/1A2B3C4D5E/edit
+ * => ID là: 1A2B3C4D5E
+ */
+const TARGET_SPREADSHEET_ID = "14WRjMvKiHkhyGUoyc_NVFbWbXNc98huIcxV4sKOulpc";
+
+function getTargetSpreadsheet() {
+  return SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
+}
+
+/**
+ * NÂNG CẤP BẢO MẬT: Hàm nhúng file HTML/JS nội bộ (Dùng cho JSZip)
+ */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
  * 1. Hàm hiển thị bảng "Dán & Tự động Tải" (Gán vào nút DÁN trên Sheet)
  */
 function showPasteAndDownloadDialog() {
+  let ui;
+  try { ui = SpreadsheetApp.getUi(); } catch (e) {}
+
   const htmlStr = `
     <div style="font-family: sans-serif; text-align: center; padding: 10px;">
       <h3 style="color: #1a73e8; margin: 0 0 10px 0;">📋 Dán & Tải Tự Động</h3>
@@ -36,14 +60,17 @@ function showPasteAndDownloadDialog() {
     </div>
   `;
   const htmlOutput = HtmlService.createHtmlOutput(htmlStr).setWidth(400).setHeight(300);
-  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Dán & Tải File Nhanh');
+  if (ui) {
+    ui.showModalDialog(htmlOutput, 'Dán & Tải File Nhanh');
+  }
 }
 
 /**
  * 2. Hàm xử lý dữ liệu dán + Tự động xóa dữ liệu cũ từ dòng 12
  */
 function processPastedData(text) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // NÂNG CẤP BẢO MẬT: Gọi file qua ID cố định
+  const ss = getTargetSpreadsheet();
   const sheet = ss.getSheetByName("データ");
   
   if (!sheet) throw new Error("Không tìm thấy sheet 'データ'");
@@ -87,8 +114,10 @@ function processPastedData(text) {
  * 3. Hàm kích hoạt tải Media từ Drive (Gán vào nút CR取得)
  */
 function downloadCRImages() {
-  const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ui;
+  try { ui = SpreadsheetApp.getUi(); } catch (e) {}
+
+  const ss = getTargetSpreadsheet();
   const mainSheet = ss.getSheetByName("データ");
   
   if (!mainSheet) return;
@@ -96,13 +125,15 @@ function downloadCRImages() {
   const lastRow = mainSheet.getLastRow();
   if (lastRow < 12) return;
 
-  const loadingHtml = HtmlService.createHtmlOutput(
-    '<div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #333; text-align:center; padding:10px;">' +
-    '  <h3 style="margin: 0 0 10px 0; color: #f2bd00;">⏳ Đang trích xuất Media...</h3>' +
-    '  <p style="font-size:12px; color:#666; margin:0;">Hệ thống đang quét Link Drive lấy Hình & Video. Vui lòng đợi...</p>' +
-    '</div>'
-  ).setWidth(350).setHeight(150);
-  ui.showModelessDialog(loadingHtml, 'Trạng thái');
+  if (ui) {
+    const loadingHtml = HtmlService.createHtmlOutput(
+      '<div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #333; text-align:center; padding:10px;">' +
+      '  <h3 style="margin: 0 0 10px 0; color: #f2bd00;">⏳ Đang trích xuất Media...</h3>' +
+      '  <p style="font-size:12px; color:#666; margin:0;">Hệ thống đang quét Link Drive lấy Hình & Video. Vui lòng đợi...</p>' +
+      '</div>'
+    ).setWidth(350).setHeight(150);
+    ui.showModelessDialog(loadingHtml, 'Trạng thái');
+  }
 
   const headers = mainSheet.getRange(11, 1, 1, mainSheet.getLastColumn()).getValues()[0];
   let linkColIdx = -1;
@@ -116,7 +147,7 @@ function downloadCRImages() {
   }
 
   if (linkColIdx === -1 || fileNameColIdx === -1) {
-    ui.alert("Lỗi", "Không tìm thấy cột 'Link' hoặc 'File_name' ở dòng 11.", ui.ButtonSet.OK);
+    if (ui) ui.alert("Lỗi", "Không tìm thấy cột 'Link' hoặc 'File_name' ở dòng 11.", ui.ButtonSet.OK);
     return;
   }
 
@@ -181,7 +212,7 @@ function downloadCRImages() {
   }
 
   // Cảnh báo nếu gặp link không có quyền truy cập
-  if (driveErrors.length > 0) {
+  if (driveErrors.length > 0 && ui) {
     let uniqueErrors = [...new Set(driveErrors)];
     let msg = "Phát hiện " + uniqueErrors.length + " link Drive bị từ chối quyền truy cập hoặc hỏng:\n\n";
     for (let k = 0; k < Math.min(uniqueErrors.length, 5); k++) {
@@ -192,7 +223,7 @@ function downloadCRImages() {
   }
 
   // Khởi chạy file Index.html để xuất ZIP
-  if (allFileTasks.length > 0) {
+  if (allFileTasks.length > 0 && ui) {
     var htmlTemplate = HtmlService.createTemplateFromFile('Index');
     htmlTemplate.fileTasksJson = JSON.stringify(allFileTasks);
     
@@ -202,34 +233,38 @@ function downloadCRImages() {
     htmlTemplate.warningMsg = "";
     var htmlOutput = htmlTemplate.evaluate().setWidth(450).setHeight(360);
     ui.showModelessDialog(htmlOutput, 'Tải Dữ Liệu Dạng ZIP');
-  } else {
+  } else if (ui) {
     ui.alert("Thông báo", "Không tìm thấy hình ảnh hay video hợp lệ nào để tải xuống.", ui.ButtonSet.OK);
   }
 }
 
 /**
- * 4. Hàm gán cho nút "CR複製" (Nhân bản / Đổi tên khi tải về) - ĐÃ FIX ĐỌC ĐUÔI FILE TỪ DRIVE
+ * 4. Hàm gán cho nút "CR複製" (Nhân bản / Đổi tên khi tải về)
  */
 function duplicateCRImages() {
-  const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ui;
+  try { ui = SpreadsheetApp.getUi(); } catch (e) {}
+
+  const ss = getTargetSpreadsheet();
   const mainSheet = ss.getSheetByName("データ");
   
   if (!mainSheet) return;
 
   const lastRow = mainSheet.getLastRow();
   if (lastRow < 12) {
-    ui.alert("Thông báo", "Không có dữ liệu ở bảng chính để xử lý.", ui.ButtonSet.OK);
+    if (ui) ui.alert("Thông báo", "Không có dữ liệu ở bảng chính để xử lý.", ui.ButtonSet.OK);
     return;
   }
 
-  const loadingHtml = HtmlService.createHtmlOutput(
-    '<div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #333; text-align:center; padding:10px;">' +
-    '  <h3 style="margin: 0 0 10px 0; color: #1a73e8;">⏳ Đang tạo bản sao...</h3>' +
-    '  <p style="font-size:12px; color:#666; margin:0;">Hệ thống đang dò tìm file gốc và thiết lập tên mới. Vui lòng đợi!</p>' +
-    '</div>'
-  ).setWidth(350).setHeight(150);
-  ui.showModelessDialog(loadingHtml, 'Trạng thái');
+  if (ui) {
+    const loadingHtml = HtmlService.createHtmlOutput(
+      '<div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; font-family:sans-serif; color: #333; text-align:center; padding:10px;">' +
+      '  <h3 style="margin: 0 0 10px 0; color: #1a73e8;">⏳ Đang tạo bản sao...</h3>' +
+      '  <p style="font-size:12px; color:#666; margin:0;">Hệ thống đang dò tìm file gốc và thiết lập tên mới. Vui lòng đợi!</p>' +
+      '</div>'
+    ).setWidth(350).setHeight(150);
+    ui.showModelessDialog(loadingHtml, 'Trạng thái');
+  }
 
   const headers = mainSheet.getRange(11, 1, 1, mainSheet.getLastColumn()).getValues()[0];
   let linkColIdx = -1;
@@ -246,7 +281,7 @@ function duplicateCRImages() {
   }
 
   if (linkColIdx === -1 || origCRColIdx === -1 || newCRColIdx === -1) {
-    ui.alert("Lỗi", "Không tìm thấy các cột 'Link', '元CR名' hoặc '先CR名' ở dòng 11.", ui.ButtonSet.OK);
+    if (ui) ui.alert("Lỗi", "Không tìm thấy các cột 'Link', '元CR名' hoặc '先CR名' ở dòng 11.", ui.ButtonSet.OK);
     return;
   }
 
@@ -254,7 +289,6 @@ function duplicateCRImages() {
   const allFileTasks = [];
   let driveErrors = [];
 
-  // THÊM BẢNG MAP ĐỊNH DẠNG TỪ DRIVE (MIME TYPE) SANG ĐUÔI FILE
   const mimeToExt = {
     'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
     'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/x-msvideo': '.avi', 'video/x-matroska': '.mkv'
@@ -301,11 +335,9 @@ function duplicateCRImages() {
 
             if (fName === origName || baseFName === baseOrigName || fName.includes(origName) || origName.includes(baseFName)) {
               
-              // TÌM ĐUÔI FILE TỪ TÊN
               let extMatch = fName.match(/\.([a-zA-Z0-9]+)$/);
               let trueExtension = extMatch ? extMatch[0] : "";
 
-              // NẾU TÊN KHÔNG CÓ ĐUÔI -> LẤY ĐUÔI TỪ ĐỊNH DẠNG GỐC CỦA DRIVE (MIME TYPE)
               if (trueExtension === "") {
                 let fileMimeType = file.getMimeType();
                 if (mimeToExt[fileMimeType]) {
@@ -313,7 +345,6 @@ function duplicateCRImages() {
                 }
               }
 
-              // GẮN ĐUÔI VÀO TÊN MỚI NẾU TÊN MỚI CHƯA CÓ ĐUÔI
               let newExtMatch = newName.match(/\.([a-zA-Z0-9]+)$/);
               if (!newExtMatch && trueExtension !== "") {
                 newName += trueExtension; 
@@ -331,7 +362,7 @@ function duplicateCRImages() {
     }
   }
 
-  if (driveErrors.length > 0) {
+  if (driveErrors.length > 0 && ui) {
     let uniqueErrors = [...new Set(driveErrors)];
     let msg = "Phát hiện " + uniqueErrors.length + " link Drive bị từ chối quyền:\n\n";
     for (let k = 0; k < Math.min(uniqueErrors.length, 5); k++) {
@@ -341,26 +372,28 @@ function duplicateCRImages() {
     ui.alert("⚠️ CẢNH BÁO", msg, ui.ButtonSet.OK);
   }
 
-  if (allFileTasks.length > 0) {
+  if (allFileTasks.length > 0 && ui) {
     var htmlTemplate = HtmlService.createTemplateFromFile('Index');
     htmlTemplate.fileTasksJson = JSON.stringify(allFileTasks);
     
-    // Xuất file CR_Export.zip
     htmlTemplate.zipFileName = "CR_Export.zip"; 
     
     htmlTemplate.warningMsg = "";
     var htmlOutput = htmlTemplate.evaluate().setWidth(450).setHeight(360);
     ui.showModelessDialog(htmlOutput, 'Tải Dữ Liệu Dạng ZIP');
-  } else {
+  } else if (ui) {
     ui.alert("Thông báo", "Không tìm thấy file gốc (元CR名) nào khớp trong các Link Drive.", ui.ButtonSet.OK);
   }
 }
 
 /**
- * 5. Hàm xóa sạch dữ liệu (Dành riêng cho nút DELETE độc lập) - CÓ TỰ ĐỘNG TẮT THÔNG BÁO
+ * 5. Hàm xóa sạch dữ liệu
  */
 function deleteData() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ui;
+  try { ui = SpreadsheetApp.getUi(); } catch (e) {}
+
+  const ss = getTargetSpreadsheet();
   const mainSheet = ss.getSheetByName("データ");
   
   if (mainSheet) {
@@ -375,21 +408,21 @@ function deleteData() {
       mainSheet.getRange(11, 7, Math.max(1, maxRows - 10), maxCols - 6).setBackground(null);
     }
     
-    // Hiển thị bảng thông báo tự động tắt sau 1.5 giây
-    const htmlStr = `
-      <div style="font-family: sans-serif; text-align: center; padding: 20px 10px;">
-        <h3 style="color: #0f9d58; margin: 0 0 10px 0;">✔️ Thành công</h3>
-        <p style="font-size: 14px; color: #555; margin: 0;">Đã dọn dẹp sạch toàn bộ dữ liệu từ dòng 12!</p>
-        <script>
-          // Tự động đóng Popup sau 1.5 giây
-          setTimeout(function() {
-            google.script.host.close();
-          }, 1500);
-        </script>
-      </div>
-    `;
-    const htmlOutput = HtmlService.createHtmlOutput(htmlStr).setWidth(300).setHeight(130);
-    SpreadsheetApp.getUi().showModelessDialog(htmlOutput, 'Trạng thái');
+    if (ui) {
+      const htmlStr = `
+        <div style="font-family: sans-serif; text-align: center; padding: 20px 10px;">
+          <h3 style="color: #0f9d58; margin: 0 0 10px 0;">✔️ Thành công</h3>
+          <p style="font-size: 14px; color: #555; margin: 0;">Đã dọn dẹp sạch toàn bộ dữ liệu từ dòng 12!</p>
+          <script>
+            setTimeout(function() {
+              google.script.host.close();
+            }, 1500);
+          </script>
+        </div>
+      `;
+      const htmlOutput = HtmlService.createHtmlOutput(htmlStr).setWidth(300).setHeight(130);
+      ui.showModelessDialog(htmlOutput, 'Trạng thái');
+    }
   }
 }
 
